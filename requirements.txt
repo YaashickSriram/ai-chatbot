@@ -1,0 +1,28 @@
+# FastAPI and server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Azure OpenAI
+openai==1.12.0
+langchain==0.1.6
+langchain-openai==0.0.5
+langgraph==0.0.20
+
+# Data processing
+#pandas==2.2.0
+#numpy==1.26.3
+
+# Snowflake
+# snowflake-connector-python==3.7.0
+# snowflake-sqlalchemy==1.5.1
+
+# Utilities
+# python-dotenv==1.0.1
+# pydantic==2.6.0
+# pydantic-settings==2.1.0
+
+# # Jupyter for data exploration
+# jupyter==1.0.0
+# notebook==7.0.7
+# ipykernel==6.29.0
