@@ -9,9 +9,6 @@ class SnowflakeConnector:
         self.connection: Optional[snowflake.connector.SnowflakeConnection] = None
 
     def connect(self) -> None:
-        """
-        Establish a Snowflake connection if not already connected.
-        """
         if self.connection is None:
             self.connection = snowflake.connector.connect(
                 user=settings.SF_USER,
@@ -22,26 +19,35 @@ class SnowflakeConnector:
                 database=settings.SF_DATABASE,
                 schema=settings.SF_SCHEMA,
             )
+
     def fetch_data(self, query: str) -> pd.DataFrame:
         self.connect()
-        # ✅ Explicit guard for type checker
+
         if self.connection is None:
             raise RuntimeError("Snowflake connection not initialized")
-        conn = self.connection  # local non-optional reference
-        cursor = conn.cursor()
+
+        cursor = self.connection.cursor()
         try:
             cursor.execute(query)
+
+            # ✅ Fetch data
             df = cursor.fetch_pandas_all()
+
+            # ✅ Force column materialization (CRITICAL)
+            df = df.copy()
+
+            print(f"Rows fetched from Snowflake: {len(df)}")
+            print(f"Columns fetched: {list(df.columns)}")
+
+            if df.empty:
+                raise RuntimeError("Snowflake query returned no data")
+
+            return df
+
         finally:
             cursor.close()
-        if df is None or df.empty:
-            raise RuntimeError("Snowflake query returned no data")
-        return df
-        
+
     def close(self) -> None:
-        """
-        Close Snowflake connection.
-        """
         if self.connection is not None:
             self.connection.close()
             self.connection = None

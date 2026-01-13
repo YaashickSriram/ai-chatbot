@@ -6,10 +6,16 @@ class BaseTool(ABC):
     """
     Abstract base class for all Pandas tools.
 
-    Every tool must:
-    - Have a name
-    - Have a description
-    - Implement execute()
+    Tools are PURE computation units.
+    They do NOT:
+    - Call LLMs
+    - Parse raw user text
+    - Decide intent
+
+    They ONLY:
+    - Receive structured parameters
+    - Execute pandas logic
+    - Return structured results
     """
 
     name: str
@@ -18,12 +24,16 @@ class BaseTool(ABC):
     @abstractmethod
     def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute the tool with structured parameters.
+        Execute the tool using structured parameters.
 
         Args:
-            params (dict): Parameters extracted by the agent.
+            params (Dict[str, Any]):
+                Parameters extracted by the ReAct agent
+                (filters, group_by, operation, columns, etc.)
 
         Returns:
-            dict: Structured result (JSON-serializable).
+            Dict[str, Any]:
+                JSON-serializable result used by the agent
+                to generate the final user response.
         """
-        pass
+        raise NotImplementedError("Tool must implement execute()")

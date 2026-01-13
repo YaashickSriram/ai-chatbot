@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # --------------------
     # OpenAI Config (REQUIRED for fallback)
     # --------------------
-    OPENAI_API_KEY: str
+    #OPENAI_API_KEY: str
 
     # --------------------
     # App-level

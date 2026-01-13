@@ -1,59 +1,63 @@
 from typing import Dict, Any, List
-
 import pandas as pd
-
 from app.tools.base_tool import BaseTool
-from app.data.dataframe_manager import DataFrameManager
 
 
 class ListTool(BaseTool):
     """
-    Tool to list values or rows from the DataFrame based on filters.
+    Tool for returning row-level records based on filters.
     """
 
-    name = "list_tool"
-    description = "Lists values or records from the dataset based on filters."
+    name = "list"
+    description = "Returns records matching given conditions"
 
-    def __init__(self, dataframe_manager: DataFrameManager):
-        self.dataframe_manager = dataframe_manager
-
-    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(
+        self,
+        df: pd.DataFrame,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
-        Execute the list operation.
+        Execute a list query.
 
         Expected params:
         {
-            "columns": ["COLUMN_1", "COLUMN_2"],   # optional
-            "filters": {"REGION": "Africa"},       # optional
-            "distinct": true,                      # optional
-            "limit": 50                            # optional
+            "filters": { "COLUMN": value },           # optional
+            "contains": { "COLUMN": "text" },         # optional (case-insensitive)
+            "columns": ["COL1", "COL2"],               # optional
+            "limit": 10                                # optional
         }
         """
 
-        df = self.dataframe_manager.get_dataframe()
-
-        columns: List[str] | None = params.get("columns")
         filters: Dict[str, Any] = params.get("filters", {})
-        distinct: bool = params.get("distinct", False)
+        contains: Dict[str, str] = params.get("contains", {})
+        columns: List[str] | None = params.get("columns")
         limit: int | None = params.get("limit")
 
-        # Step 1: Apply filters
+        # Apply equality filters
         for column, value in filters.items():
+            if column not in df.columns:
+                raise ValueError(f"Invalid filter column: {column}")
             df = df[df[column] == value]
 
-        # Step 2: Select columns
+        # Apply text contains filters (case-insensitive)
+        for column, text in contains.items():
+            if column not in df.columns:
+                raise ValueError(f"Invalid contains column: {column}")
+            df = df[df[column].astype(str).str.contains(text, case=False, na=False)]
+
+        # Select columns if specified
         if columns:
+            missing = set(columns) - set(df.columns)
+            if missing:
+                raise ValueError(f"Missing columns: {missing}")
             df = df[columns]
 
-        # Step 3: Remove duplicates if required
-        if distinct:
-            df = df.drop_duplicates()
-
-        # Step 4: Apply limit
+        # Apply limit
         if limit is not None:
             df = df.head(limit)
 
         return {
-            "count": len(df),
-            "items": df.to_dict(orient="records")
+            "tool": self.name,
+            "row_count": len(df),
+            "records": df.to_dict(orient="records")
         }

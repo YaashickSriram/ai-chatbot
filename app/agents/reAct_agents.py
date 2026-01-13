@@ -1,74 +1,150 @@
-# from typing import Dict, Any, Tuple
+import json
+from typing import Dict, Any
 
-# from app.tools.base_tool import BaseTool
+from app.data.dataframe_manager import DataFrameManager
+from app.tools.base_tool import BaseTool
+from app.utils.llm_client import AzureOpenAIClient
 
 
-# class ReActAgent:
-#     """
-#     ReAct-style agent that orchestrates reasoning and tool execution.
-#     This version contains NO LLM logic yet (manual reasoning only).
-#     """
+class ReActAgent:
+    """
+    ReAct Agent (POC-level, LLM-only).
 
-#     def __init__(self, tools: Dict[str, BaseTool]):
-#         self.tools = tools
+    Flow:
+    1. Use LLM to reason and select the correct tool (intent classification)
+    2. Execute the selected tool on pandas DataFrame
+    3. Use LLM to generate a final human-readable response
+    """
 
-#     def handle_query(self, user_query: str) -> Dict[str, Any]:
-#         """
-#         Entry point for handling a user question.
-#         """
-#         # Step 1: Reason about the query (manual logic for POC)
-#         tool_name, tool_params = self._reason(user_query)
+    def __init__(
+        self,
+        llm_client: AzureOpenAIClient,
+        dataframe_manager: DataFrameManager,
+        tools: Dict[str, BaseTool],
+    ):
+        if llm_client is None:
+            raise ValueError("ReActAgent requires a valid LLM client")
 
-#         # Step 2: Execute the selected tool
-#         result = self._execute_tool(tool_name, tool_params)
+        self.llm = llm_client
+        self.df_manager = dataframe_manager
+        self.tools = tools
 
-#         # Step 3: Format the final response
-#         return self._format_response(user_query, result)
+    # ------------------------------------------------------------------
+    # STEP 1: LLM-BASED TOOL SELECTION (NO KEYWORDS, NO MOCKS)
+    # ------------------------------------------------------------------
+    def _select_tool(self, user_query: str) -> str:
+        """
+        Uses LLM to determine the correct tool for the given user query.
+        """
 
-#     def _reason(self, user_query: str) -> Tuple[str, Dict[str, Any]]:
-#         """
-#         Analyze the user query and decide:
-#         - which tool to use
-#         - what parameters to pass
+        system_prompt = """
+You are an intent classifier for a data analytics system.
 
-#         NOTE:
-#         This is MANUAL reasoning for POC.
-#         It will be replaced by LLM-based reasoning later.
-#         """
-#         query = user_query.lower()
+Available tools:
+- direct: single numeric answers (counts, totals)
+- list: returning multiple records
+- comparison: comparing groups or time periods
+- aggregation: averages, sums, grouped metrics
 
-#         # Example:
-#         # "What is the classification level of Notse_T1_Plant6?"
-#         if "classification level" in query:
-#             return "direct_query_tool", {
-#                 "column": "CLASSIFICATION_LEVEL",
-#                 "filters": {
-#                     "INITIATIVE_NAME": "Notse_T1_Plant6"
-#                 }
-#             }
+Rules:
+- Choose exactly ONE tool
+- Respond ONLY in valid JSON
+- No explanation, no extra text
+- If unsure, choose the MOST LIKELY tool
 
-#         raise ValueError("Unable to determine intent from query")
+JSON format:
+{
+  "tool": "<tool_name>"
+}
+"""
 
-#     def _execute_tool(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
-#         """
-#         Execute the selected tool with parameters.
-#         """
-#         tool = self.tools.get(tool_name)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_query},
+        ]
 
-#         if tool is None:
-#             raise ValueError(f"Tool '{tool_name}' not registered")
+        response = self.llm.chat(messages)
 
-#         return tool.execute(params)
+        try:
+            parsed = json.loads(response)
+            tool_name = parsed["tool"]
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to parse LLM tool selection response: {response}"
+            ) from exc
 
-#     def _format_response(
-#         self,
-#         user_query: str,
-#         tool_result: Dict[str, Any]
-#     ) -> Dict[str, Any]:
-#         """
-#         Convert tool output into a final structured response.
-#         """
-#         return {
-#             "question": user_query,
-#             "answer": tool_result
-#         }
+        if tool_name not in self.tools:
+            raise ValueError(f"LLM selected unknown tool: {tool_name}")
+
+        return tool_name
+
+    # ------------------------------------------------------------------
+    # STEP 2: TOOL EXECUTION
+    # ------------------------------------------------------------------
+    def _execute_tool(self, tool_name: str, user_query: str) -> Dict[str, Any]:
+        """
+        Executes the selected tool using pandas DataFrame.
+        """
+
+        tool = self.tools[tool_name]
+        df = self.df_manager.get_dataframe()
+
+        return tool.execute(
+            {
+                "query": user_query,
+                "df": df,
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # STEP 3: FINAL LLM RESPONSE GENERATION
+    # ------------------------------------------------------------------
+    def _generate_final_answer(
+        self,
+        user_query: str,
+        tool_name: str,
+        tool_result: Dict[str, Any],
+    ) -> str:
+        """
+        Converts tool output into a natural language answer using LLM.
+        """
+
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful data assistant. Answer clearly and concisely.",
+            },
+            {
+                "role": "user",
+                "content": f"""
+User Query:
+{user_query}
+
+Tool Used:
+{tool_name}
+
+Tool Output:
+{json.dumps(tool_result, indent=2)}
+
+Generate a clear, human-friendly response.
+""",
+            },
+        ]
+
+        return self.llm.chat(messages)
+
+    # ------------------------------------------------------------------
+    # PUBLIC ENTRY POINT
+    # ------------------------------------------------------------------
+    def run(self, user_query: str) -> str:
+        """
+        Full ReAct loop execution.
+        """
+
+        tool_name = self._select_tool(user_query)
+        tool_result = self._execute_tool(tool_name, user_query)
+        final_answer = self._generate_final_answer(
+            user_query, tool_name, tool_result
+        )
+
+        return final_answer

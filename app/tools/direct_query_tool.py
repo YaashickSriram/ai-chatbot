@@ -1,54 +1,51 @@
-from typing import Dict, Any, Optional
-
+from typing import Dict, Any
+import pandas as pd
 from app.tools.base_tool import BaseTool
-from app.data.dataframe_manager import DataFrameManager
 
 
 class DirectQueryTool(BaseTool):
     """
-    Tool to retrieve a single value from the DataFrame
-    using exact-match filters.
+    Tool for single-value numeric queries.
+    Examples:
+    - total count
+    - number of surveys
     """
 
-    name = "direct_query_tool"
-    description = "Fetches a single, precise value from the dataset using filters."
+    name = "direct"
+    description = "Single numeric answers such as counts or totals"
 
-    def __init__(self, dataframe_manager: DataFrameManager):
-        self.dataframe_manager = dataframe_manager
-
-    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(
+        self,
+        df: pd.DataFrame,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
+        Execute a direct numeric query.
+
         Expected params:
         {
-            "column": "CLASSIFICATION_LEVEL",
-            "filters": {
-                "INITIATIVE_NAME": "Notse_T1_Plant6"
-            }
+            "operation": "count",
+            "filters": { "COLUMN": value }  # optional
         }
         """
 
-        df = self.dataframe_manager.get_dataframe()
+        operation = params.get("operation", "count")
+        filters = params.get("filters", {})
 
-        column: Optional[str] = params.get("column")
-        filters: Dict[str, Any] = params.get("filters", {})
+        # Apply filters if any
+        for column, value in filters.items():
+            if column not in df.columns:
+                raise ValueError(f"Invalid column: {column}")
+            df = df[df[column] == value]
 
-        if not column or not filters:
-            raise ValueError("'column' and 'filters' are required")
-
-        # Apply filters
-        for filter_column, value in filters.items():
-            df = df[df[filter_column] == value]
-
-        if df.empty:
-            return {
-                "column": column,
-                "value": None,
-                "message": "No matching record found"
-            }
-
-        value = df.iloc[0][column]
+        # Supported operations
+        if operation == "count":
+            result = len(df)
+        else:
+            raise ValueError(f"Unsupported operation: {operation}")
 
         return {
-            "column": column,
-            "value": value
+            "tool": self.name,
+            "operation": operation,
+            "value": result
         }
