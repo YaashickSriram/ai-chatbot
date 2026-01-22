@@ -1,64 +1,61 @@
 from fastapi import FastAPI
 
-from app.data.snowflake_connector import SnowflakeConnector
+from app.api.routes import router
+from app.agents.reAct_agents import ReActAgent
 from app.data.dataframe_manager import DataFrameManager
-
+from app.tools.direct_query_tool import DirectQueryTool
 from app.tools.list_tool import ListTool
 from app.tools.aggregation_tool import AggregationTool
 from app.tools.comparison_tool import ComparisonTool
-from app.tools.direct_query_tool import DirectQueryTool
+from app.utils.llm_client import AzureOpenAIClient
 
-from app.agents.reAct_agents import ReActAgent
+# -------------------------------------------------
+# FastAPI App
+# -------------------------------------------------
+app = FastAPI(
+    title="Chatbot Pandas API",
+    version="1.0.0",
+    description="ReAct-based data analytics agent"
+)
 
+# -------------------------------------------------
+# SINGLETON BOOTSTRAP (CRITICAL DESIGN)
+# -------------------------------------------------
 
-app = FastAPI()
+# Load dataset once
+df_manager = DataFrameManager()
+df_manager.load_from_csv(
+    "app/data/snapshots/G17_WFN_CONSOLIDATED_REPORT.csv"
+)
 
-_snowflake_connector: SnowflakeConnector | None = None
-_dataframe_manager: DataFrameManager | None = None
-_agent: ReActAgent | None = None
+# Azure OpenAI client
+llm_client = AzureOpenAIClient()
 
+# Tools (stateless)
+tools = {
+    "direct": DirectQueryTool(),
+    "list": ListTool(),
+    "aggregation": AggregationTool(),
+    "comparison": ComparisonTool(),
+}
 
-def initialize_app() -> None:
-    """
-    Initializes data layer, tools, and agent.
-    """
-    global _snowflake_connector, _dataframe_manager, _agent
+# Core agent
+agent = ReActAgent(
+    llm_client=llm_client,
+    dataframe_manager=df_manager,
+    tools=tools,
+)
 
-    _snowflake_connector = SnowflakeConnector()
-    _dataframe_manager = DataFrameManager(_snowflake_connector)
-    _dataframe_manager.load_data()
+# Mount API routes
+app.include_router(router)
 
-    tools = {
-        "list_tool": ListTool(_dataframe_manager),
-        "aggregation_tool": AggregationTool(_dataframe_manager),
-        "comparison_tool": ComparisonTool(_dataframe_manager),
-        "direct_query_tool": DirectQueryTool(_dataframe_manager),
+# -------------------------------------------------
+# TEMP Health Check (Phase 4.1 only)
+# -------------------------------------------------
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "agent": "ready",
+        "tools": list(tools.keys())
     }
-
-    _agent = ReActAgent(tools)
-
-
-def get_agent() -> ReActAgent:
-    """
-    Safe accessor for the initialized agent.
-    """
-    if _agent is None:
-        raise RuntimeError("Agent not initialized. Call initialize_app() first.")
-
-    return _agent
-
-def get_dataframe_manager() -> DataFrameManager:
-    """
-    Safe accessor for the initialized DataFrameManager.
-    """
-    if _dataframe_manager is None:
-        raise RuntimeError("DataFrameManager not initialized. Call initialize_app() first.")
-
-    return _dataframe_manager
-
-
-
-@app.on_event("startup")
-def startup_event():
-    initialize_app()
-    print("✅ Startup complete: Data, Tools, and Agent initialized")

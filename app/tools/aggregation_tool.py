@@ -1,69 +1,67 @@
-from typing import Dict, Any, Optional
-
-from click import Option
+from typing import Dict, Any
 import pandas as pd
 
 from app.tools.base_tool import BaseTool
-from app.data.dataframe_manager import DataFrameManager
 
 
 class AggregationTool(BaseTool):
-    """
-    Tool to perform aggregation operations on the DataFrame.
-    """
+    name = "aggregation"
 
-    name = "aggregation_tool"
-    description = "Performs aggregation operations like count, sum, mean, min, and max."
+    def execute(self, df: pd.DataFrame, params: Dict[str, Any]) -> Dict[str, Any]:
+        operation = params.get("operation")
+        group_by = params.get("group_by")
+        column = params.get("column")
 
-    def __init__(self, dataframe_manager: DataFrameManager):
-        self.dataframe_manager = dataframe_manager
+        # ----------------------------
+        # Validate required params
+        # ----------------------------
+        if not operation:
+            raise ValueError("Missing required parameter: operation")
 
-    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute aggregation.
+        if not group_by:
+            raise ValueError("Missing required parameter: group_by")
 
-        Expected params:
-        {
-            "column": "SCORE",              # required
-            "operation": "mean",            # required: count | sum | mean | min | max
-            "group_by": "SITE_REGION",      # optional
-            "filters": {"YEAR": 2024}       # optional
-        }
-        """
+        # ----------------------------
+        # Normalize columns FIRST
+        # ----------------------------
+        group_by = self._normalize_column(df, group_by)
+        column = self._normalize_column(df, column) if column else None
 
-        df = self.dataframe_manager.get_dataframe()
-
-        column: Optional[str] = params.get("column")
-        operation: Optional[str] = params.get("operation")
-        group_by: Optional[str] = params.get("group_by")
-        filters: Dict[str, Any] = params.get("filters", {})
-
-        if not column or not operation:
-            raise ValueError("Both 'column' and 'operation' are required")
-
-        # Step 1: Apply filters
-        for filter_column, value in filters.items():
-            df = df[df[filter_column] == value]
-
-        # Step 2: Perform aggregation
-        if group_by:
+        # ----------------------------
+        # COUNT
+        # ----------------------------
+        if operation == "count":
             result = (
-                df.groupby(group_by)[column]
-                .agg(operation)
-                .reset_index()
+                df.groupby(group_by)
+                .size()
+                .reset_index(name="count")
+                .to_dict(orient="records")
             )
 
-            return {
-                "operation": operation,
-                "column": column,
-                "group_by": group_by,
-                "result": result.to_dict(orient="records")
-            }
+        # ----------------------------
+        # SUM / AVERAGE
+        # ----------------------------
+        elif operation in {"sum", "average"}:
+            if not column:
+                raise ValueError(f"'column' is required for operation '{operation}'")
 
-        aggregated_value = getattr(df[column], operation)()
+            self._validate_numeric_column(df, column)
+
+            agg_fn = "sum" if operation == "sum" else "mean"
+
+            result = (
+                df.groupby(group_by)[column]
+                .agg(agg_fn)
+                .reset_index(name=operation)
+                .to_dict(orient="records")
+            )
+
+        else:
+            raise ValueError(f"Unsupported operation: {operation}")
 
         return {
+            "tool": self.name,
             "operation": operation,
-            "column": column,
-            "value": aggregated_value
+            "group_by": group_by,
+            "results": result,
         }

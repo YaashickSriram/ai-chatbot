@@ -1,3 +1,4 @@
+import json
 from typing import Dict, Any, List
 import pandas as pd
 from app.tools.base_tool import BaseTool
@@ -12,52 +13,43 @@ class ListTool(BaseTool):
     description = "Returns records matching given conditions"
 
     def execute(
-        self,
-        df: pd.DataFrame,
-        params: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Execute a list query.
-
-        Expected params:
-        {
-            "filters": { "COLUMN": value },           # optional
-            "contains": { "COLUMN": "text" },         # optional (case-insensitive)
-            "columns": ["COL1", "COL2"],               # optional
-            "limit": 10                                # optional
+    self,
+    df: pd.DataFrame,
+    params: Dict[str, Any]) -> Dict[str, Any]:
+        
+        filters = params.get("filters", {})
+        contains = params.get("contains", {})
+        # 🔧 NORMALIZATION FIX
+        if isinstance(contains, str):
+            contains = {
+            "QUESTION_TEXT": contains
         }
-        """
+            if isinstance(filters, dict):
+        # Map semantic fields → real columns
+             if "initiative" in params:
+               filters["INITIATIVE_NAME"] = params["initiative"]
+        if "year" in params:
+            filters["YEAR"] = params["year"]
 
-        filters: Dict[str, Any] = params.get("filters", {})
-        contains: Dict[str, str] = params.get("contains", {})
-        columns: List[str] | None = params.get("columns")
-        limit: int | None = params.get("limit")
+        columns = params.get("columns")
+        limit = params.get("limit", 10)
 
-        # Apply equality filters
+    # Apply equality filters
         for column, value in filters.items():
-            if column not in df.columns:
-                raise ValueError(f"Invalid filter column: {column}")
-            df = df[df[column] == value]
+          if column not in df.columns:
+            continue
+          df = df[df[column] == value]
 
-        # Apply text contains filters (case-insensitive)
+    # Apply text contains filters
         for column, text in contains.items():
-            if column not in df.columns:
-                raise ValueError(f"Invalid contains column: {column}")
-            df = df[df[column].astype(str).str.contains(text, case=False, na=False)]
+         if column not in df.columns:
+            continue
+         df = df[df[column].str.contains(text, case=False, na=False)]
 
-        # Select columns if specified
         if columns:
-            missing = set(columns) - set(df.columns)
-            if missing:
-                raise ValueError(f"Missing columns: {missing}")
-            df = df[columns]
-
-        # Apply limit
-        if limit is not None:
-            df = df.head(limit)
+         df = df[columns]
 
         return {
-            "tool": self.name,
-            "row_count": len(df),
-            "records": df.to_dict(orient="records")
-        }
+        "tool": "list",
+        "results": df.head(limit).to_dict(orient="records")
+         }
