@@ -6,8 +6,10 @@ import re
 class ReActAgent:
     """
     ReAct-style agent that:
-    - Uses LLM for intent + parameter extraction
-    - Executes tools on a shared DataFrame
+    - Uses LLM for semantic tool planning
+    - Grounds decisions in actual dataframe schema
+    - Executes tools deterministically
+    - Generates human-readable answers
     """
 
     def __init__(self, llm_client, dataframe_manager, tools: Dict[str, Any]):
@@ -15,104 +17,195 @@ class ReActAgent:
         self.df_manager = dataframe_manager
         self.tools = tools
 
-    # -----------------------------
-    # TOOL SELECTION (LLM ONLY)
-    # -----------------------------
-    def _select_tool(self, user_query: str) -> str:
-        messages = [
-            {
-                "role": "system",
-                "content": """
-You are an intent classifier for a data analytics system.
+    # -------------------------------------------------
+    # SEMANTIC TOOL PLANNING PROMPT (CORE OF PHASE 5.3)
+    # -------------------------------------------------
+    def _tool_planning_prompt(self, query: str, columns: list[str]) -> str:
+        cols = ", ".join(columns)
+        return f"""
+You are a data analytics reasoning engine.
 
-Available tools:
-- direct: single numeric answers (counts, totals)
-- list: list records
-- aggregation: sums, averages, grouped metrics
-- comparison: compare groups or periods
+You have access to a dataset with the following columns:
+{cols}
+
+Your task:
+1. Understand the user's intent (natural language, conversational)
+2. Decide the correct analytical tool
+3. Extract the required parameters grounded in the dataset
 
 Rules:
-- Choose exactly ONE tool
-- Respond ONLY in JSON
-- No explanations
+- You MUST choose columns only from the list above
+- NEVER invent column names
+- NEVER use conceptual words like "stage", "maturity", "doing well"
+- If the question cannot be answered using these columns, return:
 
-JSON format:
-{ "tool": "<tool_name>" }
+{{
+  "tool": "none",
+  "params": {{}}
+}}
+
+Available tools:
+
+1. aggregation  
+Used when the user asks about quantities, totals, averages, distributions,
+comparisons across groups or time.
+
+Required JSON format:
+{{
+  "tool": "aggregation",
+  "params": {{
+    "operation": "count | sum | average",
+    "group_by": "<column name>",
+    "column": "<numeric column name or null>"
+  }}
+}}
+
+Rules for aggregation:
+- Use "count" for how many, number of, volume, prevalence
+- Use "sum" for total, combined, overall amount
+- Use "average" for mean or typical value
+- column MUST be null for count
+- group_by MUST be one of the provided columns
+
+2. list  
+Used when the user wants to see records, initiatives, examples, details,
+policies, questions, or descriptions.
+
+Required JSON format:
+{{
+  "tool": "list",
+  "params": {{
+    "filters": {{
+      "<column name>": "<value>"
+    }}
+  }}
+}}
+
+Rules for list:
+- Infer semantic meaning (e.g. "support for new mothers" → CATEGORY = "Breastfeeding Support")
+- Filters MUST map to existing columns
+- Values do NOT need exact string match but must be semantically correct
+
+STRICT RULES:
+- Respond ONLY with valid JSON
+- DO NOT explain anything
+- DO NOT invent column names
+- If something cannot be inferred, set it explicitly to null
+
+User query:
+{query}
 """
-            },
-            {"role": "user", "content": user_query},
-        ]
 
-        response = self.llm.chat(messages)
-        # parsed = json.loads(response)
+    # -------------------------------------------------
+    # PLAN: TOOL + PARAMS (LLM-ONLY, SCHEMA-GROUNDED)
+    # -------------------------------------------------
+    def plan(self, user_query: str) -> Dict[str, Any]:
+        df = self.df_manager.get_dataframe()
+        prompt = self._tool_planning_prompt(
+            query=user_query,
+            columns=df.columns.tolist()
+        )
 
-         # ✅ FIX: strip markdown + whitespace
+        response = self.llm.chat([
+            {"role": "system", "content": prompt}
+        ])
+
         cleaned = response.strip()
-
-        # Remove ```json ... ```
         cleaned = re.sub(r"^```json", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"^```", "", cleaned)
         cleaned = re.sub(r"```$", "", cleaned)
-
         cleaned = cleaned.strip()
 
         try:
-            parsed = json.loads(cleaned)
+            plan = json.loads(cleaned)
         except json.JSONDecodeError as e:
-            raise ValueError(
-                f"LLM returned invalid JSON:\n{response}"
-            ) from e
+            raise ValueError(f"LLM returned invalid JSON:\n{response}") from e
 
-        tool_name = parsed.get("tool")
+        if "tool" not in plan or "params" not in plan:
+            raise ValueError("Invalid tool plan structure returned by LLM")
+
+        return plan
+
+    # -------------------------------------------------
+    # EXECUTION (DETERMINISTIC)
+    # -------------------------------------------------
+    def run(self, user_query: str) -> Dict[str, Any]:
+        plan = self.plan(user_query)
+
+        df = self.df_manager.get_dataframe()
+        schema = list(df.columns)
+
+        tool_name = plan["tool"]
+        params = plan["params"]
+
+        if tool_name == "none":
+            return {
+            "tool": "none",
+            "results": [],
+            "value": None
+        }
+    
         if tool_name not in self.tools:
             raise ValueError(f"Unsupported tool selected: {tool_name}")
-
-        return tool_name
-
-    # -----------------------------
-    # PARAM EXTRACTION (LLM)
-    # -----------------------------
-    def _extract_params(self, tool_name: str, user_query: str) -> Dict[str, Any]:
-        messages = [
-            {
-                "role": "system",
-                "content": f"""
-You extract structured parameters for the tool: {tool_name}
-
-Respond ONLY in JSON.
-"""
-            },
-            {"role": "user", "content": user_query},
-        ]
-
-        response = self.llm.chat(messages)
-
-        cleaned = response.strip()
-
-        # Remove ```json ... ```
-        cleaned = re.sub(r"^```json", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"^```", "", cleaned)
-        cleaned = re.sub(r"```$", "", cleaned)
-
-        cleaned = cleaned.strip()
-
-        try:
-            parsed = json.loads(cleaned)
-            return parsed
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"LLM returned invalid JSON:\n{response}"
-            ) from e
-        
-
-    # -----------------------------
-    # EXECUTION
-    # -----------------------------
-    def run(self, user_query: str) -> Dict[str, Any]:
-        tool_name = self._select_tool(user_query)
-        params = self._extract_params(tool_name, user_query)
 
         tool = self.tools[tool_name]
         df = self.df_manager.get_dataframe()
 
         return tool.execute(df=df, params=params)
+        
+        plan = self.plan(user_query)
+        if plan["tool"] == "none":
+            return self._clarify(user_query, df.columns.tolist())
+
+    
+    def _clarify(self, query: str, columns: list[str]) -> Dict[str, Any]:
+        return {
+        "tool": "none",
+        "answer": (
+            "I can’t answer this directly using the available data. "
+            "You can ask about initiatives by location, category, "
+            "classification level, company, or year."
+        ),
+        "results": None,
+        "value": None
+    }
+
+
+    # -------------------------------------------------
+    # ANSWER GENERATION (NLP RESPONSE LAYER)
+    # -------------------------------------------------
+    def generate_answer(self, query: str, tool_response: dict) -> str:
+        results = tool_response.get("results") or []
+        if not results:
+            return (
+            "The dataset does not contain enough information "
+            "to answer this question."
+        )
+        messages = [
+        {
+            "role": "system",
+            "content": """
+You are a data assistant.
+
+STRICT RULES:
+- Use ONLY the data provided below
+- DO NOT use external knowledge
+- DO NOT infer meaning beyond the data
+- If something is not in the data, say so clearly
+"""
+        },
+        {
+            "role": "user",
+            "content": f"""
+        User question: {query}
+        Data:
+        {json.dumps(results, indent=2)}
+
+Task:
+- Answer in plain English
+- Summarize only what is visible in the data
+"""
+        }
+    ]
+        response = self.llm.chat(messages)
+        return response.strip()

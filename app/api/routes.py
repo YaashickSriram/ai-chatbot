@@ -23,15 +23,30 @@ async def chat(
     logger.info(f"Incoming chat query: {query}")
 
     try:
-        # run agent.run in a worker thread so event loop isn't blocked
-        response = await run_in_threadpool(agent.run, query)
+        # 1️⃣ Run tool selection + execution safely
+        tool_response = await run_in_threadpool(agent.run, query)
 
-        if not isinstance(response, dict):
+        # 2️⃣ Defensive validation FIRST
+        if not isinstance(tool_response, dict):
             logger.error("Agent returned non-dict response")
-            raise HTTPException(status_code=500, detail="Invalid response format from agent")
+            raise HTTPException(
+                status_code=500,
+                detail="Invalid response format from agent"
+            )
 
-        logger.info(f"Chat processed successfully | tool={response.get('tool')}")
-        return response
+        # 3️⃣ Generate natural language answer
+        answer = agent.generate_answer(query, tool_response)
+
+        logger.info(
+            f"Chat processed successfully | tool={tool_response.get('tool')}"
+        )
+
+        return {
+            "tool": tool_response.get("tool"),
+            "answer": answer,
+            "results": tool_response.get("results"),
+            "value": tool_response.get("value"),
+        }
 
     except ValueError as ve:
         logger.warning(f"Validation error: {ve}")
@@ -39,4 +54,7 @@ async def chat(
 
     except Exception:
         logger.exception("Unhandled exception during chat execution")
-        raise HTTPException(status_code=500, detail="Internal server error while processing query")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error while processing query"
+        )

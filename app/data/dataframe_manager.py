@@ -153,3 +153,5 @@ class DataFrameManager:
             raise ValueError(f"Missing columns: {missing}")
 
         return df[columns]
+
+    

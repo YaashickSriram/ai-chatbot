@@ -14,6 +14,7 @@ class ChatRequest(BaseModel):
 # -----------------------------
 class ChatResponse(BaseModel):
     tool: Optional[Any]
+    answer: str 
     results: Optional[List[Dict[str, Any]]] = None
     value: Optional[Any] = None
 
