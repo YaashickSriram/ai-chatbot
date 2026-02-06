@@ -11,6 +11,15 @@ class ListTool(BaseTool):
     name = "list"
     description = "Returns records matching given conditions"
 
+    _LOCATION_COLUMNS = [
+        "SITE_NAME",
+        "SITE_COUNTRY",
+        "COUNTRY",
+        "SITE_REGION",
+        "ENTITY",
+        "PLANT",
+    ]
+
     def execute(
         self,
         df: pd.DataFrame,
@@ -31,25 +40,73 @@ class ListTool(BaseTool):
             filters["INITIATIVE_NAME"] = params["initiative"]
 
         if "year" in params:
-            filters["YEAR"] = params["year"]
+            filters["EFFECTIVE_YEAR"] = params["year"]
 
         columns = params.get("columns")
-        limit = params.get("limit", 10)
+        distinct = bool(params.get("distinct", False))
+        limit = params.get("limit")
+
+        def apply_location_search(dataframe: pd.DataFrame, value: Any) -> pd.DataFrame:
+            location_columns = [
+                col for col in self._LOCATION_COLUMNS if col in dataframe.columns
+            ]
+            if not location_columns:
+                return dataframe
+
+            text_value = str(value)
+            mask = None
+            for col in location_columns:
+                col_mask = dataframe[col].astype(str).str.contains(
+                    text_value, case=False, na=False
+                )
+                mask = col_mask if mask is None else mask | col_mask
+
+            if mask is None:
+                return dataframe
+            return dataframe[mask]
 
         # Apply equality filters
         for column, value in filters.items():
-            if column not in df.columns:
+            if column.lower() in {"location", "city", "country", "site", "region"}:
+                df = apply_location_search(df, value)
                 continue
-            df = df[df[column] == value]
+            try:
+                normalized_column = self._normalize_column(df, column)
+            except ValueError:
+                continue
+            if normalized_column in self._LOCATION_COLUMNS and isinstance(value, str):
+                df = apply_location_search(df, value)
+                continue
+            df = df[df[normalized_column] == value]
 
         # Apply text contains filters
         for column, text in contains.items():
-            if column not in df.columns:
+            if column.lower() in {"location", "city", "country", "site", "region"}:
+                df = apply_location_search(df, text)
                 continue
-            df = df[df[column].str.contains(text, case=False, na=False)]
+            try:
+                normalized_column = self._normalize_column(df, column)
+            except ValueError:
+                continue
+            df = df[
+                df[normalized_column]
+                .astype(str)
+                .str.contains(str(text), case=False, na=False)
+            ]
 
         if columns:
-            df = df[columns]
+            normalized_columns = []
+            for column in columns:
+                try:
+                    normalized_columns.append(self._normalize_column(df, column))
+                except ValueError:
+                    continue
+            if normalized_columns:
+                df = df[normalized_columns]
+                columns = normalized_columns
+
+        if columns and (distinct or columns == ["INITIATIVE_NAME"]):
+            df = df.drop_duplicates(subset=columns)
 
         if df.empty:
             return {
@@ -58,8 +115,11 @@ class ListTool(BaseTool):
                 "value": None
             }
 
+        if limit is not None:
+            df = df.head(limit)
+
         return {
             "tool": self.name,
-            "results": df.head(limit).to_dict(orient="records"),
+            "results": df.to_dict(orient="records"),
             "value": None
         }

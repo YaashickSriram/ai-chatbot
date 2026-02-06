@@ -77,13 +77,22 @@ Required JSON format:
   "params": {{
     "filters": {{
       "<column name>": "<value>"
-    }}
+    }},
+    "contains": {{
+      "<column name>": "<substring>"
+    }},
+    "columns": ["<column name>", "..."],
+    "distinct": true,
+    "limit": 50
   }}
 }}
 
 Rules for list:
 - Infer semantic meaning (e.g. "support for new mothers" → CATEGORY = "Breastfeeding Support")
-- Filters MUST map to existing columns
+- Use columns only from the provided list
+- Use "contains" for partial matches, locations, or city names (e.g. "in Dubai")
+- Prefer location-related columns: SITE_NAME, SITE_COUNTRY, COUNTRY, SITE_REGION, ENTITY, PLANT
+- If user asks for "initiative names", set columns=["INITIATIVE_NAME"] and distinct=true
 - Values do NOT need exact string match but must be semantically correct
 
 STRICT RULES:
